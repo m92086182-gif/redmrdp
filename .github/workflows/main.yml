@@ -54,8 +54,8 @@ jobs:
 
     - name: إنشاء مستخدم مسؤول
       run: |
-        # استخدام كلمة مرور ثابتة
-        $password = "qwertyuiop"
+        # استخدام كلمة مرور قوية تفي بمتطلبات Windows
+        $password = "QwErTyUiOp123!"
         $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
         
         # حذف المستخدم إذا كان موجوداً مسبقاً
