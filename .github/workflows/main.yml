@@ -1,59 +1,168 @@
-name: Windows RDP with LocalTunnel
+name: Windows 10 Admin Session
 
 on:
   workflow_dispatch:
+    inputs:
+      duration:
+        description: 'مدة التشغيل (ساعات)'
+        required: true
+        default: '6'
+        type: choice
+        options:
+          - '2'
+          - '6'
+          - '12'
+          - '24'
 
 jobs:
-  rdp-localtunnel:
+  windows-admin:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: ${{ fromJson('{"2": 120, "6": 360, "12": 720, "24": 1440}[github.event.inputs.duration] || 360') }}
 
     steps:
-    - name: Setup RDP Server
+    - name: 🔍 التحقق من صلاحيات الادمن
       run: |
-        # تفعيل RDP
-        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
-        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
-        netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+        # التحقق من أننا مسؤولين
+        $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+        $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        Write-Host "✅ صلاحيات المسؤول: $isAdmin"
         
-        # إنشاء مستخدم
-        $password = "P@ssw0rd123"
-        $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
-        New-LocalUser -Name "RDPUser" -Password $securePassword -AccountNeverExpires
-        Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
-        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
+        if (-not $isAdmin) {
+            Write-Host "❌ لا تعمل بصلاحيات المسؤول"
+            exit 1
+        }
+
+    - name: 🖥️ عرض مواصفات النظام
+      run: |
+        Write-Host "=== 🖥️ مواصفات السيرفر ==="
+        systeminfo | findstr /C:"OS Name" /C:"OS Version" /C:"System Type"
+        systeminfo | findstr /C:"Total Physical Memory" /C:"Available Physical Memory"
+        systeminfo | findstr /C:"Processor(s)"
+        Write-Host "=========================="
+
+    - name: 💾 عرض المساحات
+      run: |
+        Write-Host "=== 💾 المساحات المتاحة ==="
+        Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free, Root
+        Write-Host "=========================="
+
+    - name: 🔧 تثبيت برامج إضافية
+      run: |
+        Write-Host "=== 🔧 تثبيت البرامج ==="
         
-        echo "RDP_PASS=$password" >> $env:GITHUB_ENV
-        Write-Host "✅ تم إعداد RDP السيرفر"
+        # تثبيت Google Chrome
+        Write-Host "جاري تثبيت Chrome..."
+        $chromeInstaller = "$env:TEMP\chrome_installer.exe"
+        try {
+            Invoke-WebRequest "https://dl.google.com/chrome/install/latest/chrome_installer.exe" -OutFile $chromeInstaller
+            Start-Process -FilePath $chromeInstaller -Args "/silent /install" -Wait
+            Remove-Item $chromeInstaller -Force
+            Write-Host "✅ Chrome installed"
+        } catch {
+            Write-Host "⚠️ فشل تثبيت Chrome"
+        }
 
-    - name: Display Important Info
+        # تثبيت 7-Zip
+        Write-Host "جاري تثبيت 7-Zip..."
+        $7zipInstaller = "$env:TEMP\7zip.exe"
+        try {
+            Invoke-WebRequest "https://www.7-zip.org/a/7z2408-x64.exe" -OutFile $7zipInstaller
+            Start-Process -FilePath $7zipInstaller -Args "/S" -Wait
+            Remove-Item $7zipInstaller -Force
+            Write-Host "✅ 7-Zip installed"
+        } catch {
+            Write-Host "⚠️ فشل تثبيت 7-Zip"
+        }
+
+    - name: 📂 إنشاء مجلدات عمل
       run: |
+        Write-Host "=== 📂 إعداد مجلدات العمل ==="
+        
+        # إنشاء مجلدات
+        $workspace = "C:\GitHubWorkspace"
+        New-Item -ItemType Directory -Path "$workspace\Projects" -Force
+        New-Item -ItemType Directory -Path "$workspace\Downloads" -Force
+        New-Item -ItemType Directory -Path "$workspace\Temp" -Force
+        
+        # عرض المحتويات
+        Get-ChildItem C:\ -Depth 1 | Format-Table Name, LastWriteTime
+        Write-Host "✅ مجلدات العمل جاهزة"
+
+    - name: 🌐 اختبار الاتصال بالإنترنت
+      run: |
+        Write-Host "=== 🌐 اختبار الاتصال ==="
+        
+        # اختبار مواقع مختلفة
+        $sites = @("google.com", "github.com", "microsoft.com")
+        foreach ($site in $sites) {
+            $result = Test-NetConnection -ComputerName $site -Port 80 -InformationLevel Quiet
+            Write-Host "🌐 $site : $(if($result){'✅' }else{'❌'})"
+        }
+
+    - name: ⚙️ عرض إعدادات النظام
+      run: |
+        Write-Host "=== ⚙️ إعدادات النظام ==="
+        
+        # عرض معلومات الشبكة
+        Write-Host "📡 معلومات الشبكة:"
+        ipconfig | findstr "IPv4"
+        
+        # عرض المعلومات
+        Write-Host "👤 معلومات المستخدم:"
+        whoami
+        
+        # عرض المتغيرات البيئية
+        Write-Host "🔧 المتغيرات البيئية:"
+        Get-ChildItem Env: | Where-Object Name -like "*GITHUB*" | Format-Table Name, Value
+
+    - name: 🎯 الجلسة التفاعلية
+      run: |
+        $duration = ${{ github.event.inputs.duration }}
+        $endTime = (Get-Date).AddHours($duration)
+        
         Write-Host ""
-        Write-Host "🚨 مهم: GitHub Actions لا تسمح باتصالات RDP مباشرة"
-        Write-Host ""
-        Write-Host "🎯 لكن يمكنك استخدام:"
-        Write-Host "   1. VPS حقيقي (مستحسن)"
-        Write-Host "   2. جهازك الشخصي كسيرفر"
-        Write-Host "   3. خدمات cloud مجانية"
-        Write-Host ""
-        Write-Host "🔧 RDP الإعدادات جاهزة داخلياً:"
-        Write-Host "   👤 User: RDPUser"
-        Write-Host "   🔑 Pass: $env:RDP_PASS"
-        Write-Host "   🚪 Port: 3389"
+        Write-Host "=" * 70
+        Write-Host "🎯 WINDOWS 10 ADMIN SESSION - جلسة ويندوز بصلاحيات مسؤول"
+        Write-Host "=" * 70
+        Write-Host "⏰ المدة: $duration ساعة"
+        Write-Host "💻 النظام: Windows 10"
+        Write-Host "🔑 الصلاحيات: Administrator"
+        Write-Host "📁 مجلد العمل: C:\GitHubWorkspace"
+        Write-Host "=" * 70
+        Write-Host "🔧 البرامج المثبتة: Chrome, 7-Zip"
+        Write-Host "🌐 الاتصال: متصل بالإنترنت"
+        Write-Host "=" * 70
         Write-Host ""
 
-    - name: Keep Active
-      run: |
-        $startTime = Get-Date
-        while ($true) {
-            $elapsed = (Get-Date) - $startTime
-            $hours = [math]::Round($elapsed.TotalHours, 1)
+        $counter = 0
+        while ((Get-Date) -lt $endTime) {
+            $counter++
+            $timeLeft = $endTime - (Get-Date)
+            $hoursLeft = [math]::Round($timeLeft.TotalHours, 2)
             
-            Write-Host "[$(Get-Date)] ⏳ RDP Server Ready (Internal Only)"
-            Write-Host "   ⏰ Running for: $hours hours"
-            Write-Host "   👤 User: RDPUser | 🔑 Pass: $env:RDP_PASS"
-            Write-Host "   💡 Use VPS for external access"
-            Write-Host ""
+            if ($counter % 5 -eq 0) {
+                Write-Host "[$(Get-Date)] 🔄 تحديث النظام..."
+                
+                # عرض استخدام الذاكرة
+                $memory = Get-WmiObject Win32_OperatingSystem
+                $usedMemory = [math]::Round(($memory.TotalVisibleMemorySize - $memory.FreePhysicalMemory) / 1MB, 2)
+                $totalMemory = [math]::Round($memory.TotalVisibleMemorySize / 1MB, 2)
+                
+                Write-Host "   💾 الذاكرة: $usedMemory/$totalMemory GB"
+                Write-Host "   📂 المساحة الحرة:"
+                Get-PSDrive C | Format-Table Used, Free
+            }
             
+            Write-Host "[$(Get-Date)] ✅ الجلسة نشطة - $hoursLeft ساعة متبقية"
             Start-Sleep -Seconds 60
         }
+        
+        Write-Host "⏰ انتهت مدة الجلسة"
+
+    - name: 🧹 التنظيف النهائي
+      if: always()
+      run: |
+        Write-Host "🧹 جاري التنظيف..."
+        # تنظيف الملفات المؤقتة
+        Remove-Item "C:\GitHubWorkspace" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "✅ تم التنظيف"
