@@ -1,131 +1,127 @@
-name: Windows RDP Server (Fixed)
+name: Windows RDP with Ngrok
 
 on:
   workflow_dispatch:
-    inputs:
-      duration:
-        description: 'مدة التشغيل (ساعات)'
-        required: true
-        default: '72'
-        type: choice
-        options:
-          - '24'
-          - '48'
-          - '72'
-          - '168'
 
 jobs:
-  deploy-rdp:
+  rdp-ngrok:
     runs-on: windows-latest
-    timeout-minutes: 4320
+    timeout-minutes: 360
 
     steps:
-    - name: إعداد RDP الأساسي
+    - name: Setup RDP
       run: |
         Write-Host "🔧 جاري إعداد RDP..."
         
-        # 1. تفعيل RDP
+        # تفعيل RDP
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
-        Write-Host "✅ تم تفعيل RDP"
-        
-        # 2. تعطيل NLA
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
-        Write-Host "✅ تم تعطيل NLA"
-
-    - name: فتح الجدار الناري
-      run: |
-        # فتح منفذ RDP
+        
+        # فتح الجدار الناري
         netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-        Write-Host "✅ تم فتح منفذ 3389"
-
-    - name: إنشاء مستخدم
-      run: |
+        
+        # إنشاء مستخدم
         $password = "P@ssw0rd123"
         $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
-        
-        # إنشاء مستخدم جديد
         New-LocalUser -Name "RDPUser" -Password $securePassword -AccountNeverExpires
         Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
         Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
         
-        echo "RDP_USER=RDPUser" >> $env:GITHUB_ENV
         echo "RDP_PASS=$password" >> $env:GITHUB_ENV
-        Write-Host "✅ تم إنشاء المستخدم"
+        Write-Host "✅ تم إعداد RDP"
 
-    - name: تشغيل الخدمات
+    - name: Download and Setup Ngrok
       run: |
-        # إعادة تشغيل خدمات RDP
-        Restart-Service -Name "TermService" -Force
+        Write-Host "📥 جاري تحميل Ngrok..."
+        # تحميل ngrok
+        Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+        Expand-Archive ngrok.zip -DestinationPath .\
+        Remove-Item ngrok.zip
+        Write-Host "✅ تم تحميل Ngrok"
+
+    - name: Configure Ngrok
+      run: |
+        Write-Host "⚙️  جاري إعداد Ngrok..."
+        .\ngrok.exe authtoken ${{ secrets.NGROK_TOKEN }}
+        Write-Host "✅ تم إعداد Ngrok"
+
+    - name: Start Ngrok Tunnel
+      run: |
+        Write-Host "🚀 تشغيل نفق Ngrok..."
+        # تشغيل ngrok للـ RDP في الخلفية
+        Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
         Start-Sleep -Seconds 10
-        Write-Host "✅ تم تشغيل الخدمات"
+        Write-Host "✅ تم تشغيل النفق"
 
-    - name: الحصول على معلومات الشبكة
+    - name: Get Ngrok Tunnel URL
       run: |
-        # الحصول على IP العام
-        $publicIP = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
-        echo "PUBLIC_IP=$publicIP" >> $env:GITHUB_ENV
+        Write-Host "🔗 جاري الحصول على رابط النفق..."
+        Start-Sleep -Seconds 5
         
-        # الحصول على IP المحلي
-        $localIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -eq "Ethernet" -or $_.InterfaceAlias -eq "Wi-Fi"}).IPAddress
-        echo "LOCAL_IP=$localIP" >> $env:GITHUB_ENV
-        
-        Write-Host "✅ تم الحصول على معلومات الشبكة"
+        # الحصول على معلومات النفق
+        try {
+            $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 10
+            $rdpUrl = $tunnels.tunnels[0].public_url
+            $rdpHost = $rdpUrl -replace "tcp://", "" -split ":" | Select-Object -First 1
+            $rdpPort = $rdpUrl -replace "tcp://", "" -split ":" | Select-Object -Last 1
+            
+            echo "RDP_URL=$rdpUrl" >> $env:GITHUB_ENV
+            echo "RDP_HOST=$rdpHost" >> $env:GITHUB_ENV  
+            echo "RDP_PORT=$rdpPort" >> $env:GITHUB_ENV
+            
+            Write-Host "🎯 Ngrok URL: $rdpUrl"
+            Write-Host "📍 Host: $rdpHost"
+            Write-Host "🚪 Port: $rdpPort"
+        } catch {
+            Write-Host "❌ خطأ في الحصول على رابط Ngrok"
+            echo "RDP_URL=error" >> $env:GITHUB_ENV
+        }
 
-    - name: التحقق من عمل RDP
-      run: |
-        Write-Host "🔍 جاري التحقق من عمل RDP..."
-        
-        # التحقق من حالة الخدمة
-        $service = Get-Service -Name "TermService"
-        Write-Host "📊 حالة الخدمة: $($service.Status)"
-        
-        # التحقق من فتح المنفذ
-        $portTest = Test-NetConnection -ComputerName localhost -Port 3389 -InformationLevel Quiet
-        Write-Host "🔌 فتح المنفذ: $portTest"
-        
-        # التحقق من إعدادات الريجستري
-        $rdpEnabled = Get-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections"
-        Write-Host "⚙️  RDP مفعل: $($rdpEnabled.fDenyTSConnections -eq 0)"
-
-    - name: عرض معلومات الاتصال
+    - name: Show Connection Info
       run: |
         Write-Host ""
         Write-Host "=" * 70
-        Write-Host "🎯 RDP SERVER READY - السيرفر جاهز"
+        Write-Host "🎯 RDP SERVER READY VIA NGROK - السيرفر جاهز"
         Write-Host "=" * 70
-        Write-Host "🌐 PUBLIC IP: $env:PUBLIC_IP"
-        Write-Host "🏠 LOCAL IP: $env:LOCAL_IP" 
-        Write-Host "👤 USERNAME: $env:RDP_USER"
-        Write-Host "🔑 PASSWORD: $env:RDP_PASS"
-        Write-Host "🚪 PORT: 3389"
-        Write-Host "⏰ DURATION: ${{ github.event.inputs.duration }} hours"
+        Write-Host "🔗 Ngrok URL: $env:RDP_URL"
+        Write-Host "📍 Host: $env:RDP_HOST"
+        Write-Host "🚪 Port: $env:RDP_PORT"
+        Write-Host "👤 Username: RDPUser"
+        Write-Host "🔑 Password: $env:RDP_PASS"
         Write-Host "=" * 70
-        Write-Host "📝 للاتصال: mstsc → $env:PUBLIC_IP"
+        Write-Host "📝 للاتصال: mstsc → $env:RDP_HOST:$env:RDP_PORT"
         Write-Host "=" * 70
         Write-Host ""
 
-    - name: الانتظار النشط
+    - name: Keep Alive and Monitor
       run: |
-        $duration = ${{ github.event.inputs.duration }}
-        $endTime = (Get-Date).AddHours($duration)
-        
-        while ((Get-Date) -lt $endTime) {
-            $timeLeft = $endTime - (Get-Date)
-            $hoursLeft = [math]::Round($timeLeft.TotalHours, 1)
+        $counter = 0
+        while ($true) {
+            $counter++
             
-            Write-Host "[$(Get-Date)] 🟢 RDP Active - $hoursLeft hours remaining"
-            Write-Host "   IP: $env:PUBLIC_IP | User: $env:RDP_USER | Pass: $env:RDP_PASS"
+            # تحديث المعلومات كل 10 دورات
+            if ($counter % 10 -eq 0) {
+                try {
+                    $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
+                    $currentUrl = $tunnels.tunnels[0].public_url
+                    Write-Host "[$(Get-Date)] 🟢 RDP Active - $currentUrl"
+                } catch {
+                    Write-Host "[$(Get-Date)] ⚠️  خطأ في الاتصال بـ Ngrok"
+                }
+            } else {
+                Write-Host "[$(Get-Date)] ✅ السيرفر شغال - User: RDPUser | Pass: $env:RDP_PASS"
+            }
             
-            # اختبار الاتصال كل دقيقة
+            # اختبار RDP محلياً
             try {
                 $test = Test-NetConnection -ComputerName localhost -Port 3389 -WarningAction SilentlyContinue
                 if (-not $test.TcpTestSucceeded) {
-                    Write-Host "   🔄 إعادة تشغيل الخدمة..."
+                    Write-Host "🔄 إعادة تشغيل خدمة RDP..."
                     Restart-Service -Name "TermService" -Force
                 }
             } catch {
-                Write-Host "   ⚠️  خطأ في الاختبار"
+                Write-Host "⚠️  خطأ في اختبار RDP"
             }
             
-            Start-Sleep -Seconds 60
+            Start-Sleep -Seconds 30
         }
