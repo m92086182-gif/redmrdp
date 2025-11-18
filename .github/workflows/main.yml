@@ -1,20 +1,22 @@
-name: Windows RDP with Free Ngrok
+name: Windows RDP with LocalTunnel
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp-free:
+  rdp-localtunnel:
     runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
-    - name: Setup RDP
+    - name: Setup RDP Server
       run: |
+        # تفعيل RDP
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
         netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
         
+        # إنشاء مستخدم
         $password = "P@ssw0rd123"
         $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
         New-LocalUser -Name "RDPUser" -Password $securePassword -AccountNeverExpires
@@ -22,67 +24,36 @@ jobs:
         Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
         
         echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+        Write-Host "✅ تم إعداد RDP السيرفر"
 
-    - name: Download Ngrok
+    - name: Display Important Info
       run: |
-        Invoke-WebRequest "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
-        Expand-Archive ngrok.zip -DestinationPath .\
-        Remove-Item ngrok.zip
+        Write-Host ""
+        Write-Host "🚨 مهم: GitHub Actions لا تسمح باتصالات RDP مباشرة"
+        Write-Host ""
+        Write-Host "🎯 لكن يمكنك استخدام:"
+        Write-Host "   1. VPS حقيقي (مستحسن)"
+        Write-Host "   2. جهازك الشخصي كسيرفر"
+        Write-Host "   3. خدمات cloud مجانية"
+        Write-Host ""
+        Write-Host "🔧 RDP الإعدادات جاهزة داخلياً:"
+        Write-Host "   👤 User: RDPUser"
+        Write-Host "   🔑 Pass: $env:RDP_PASS"
+        Write-Host "   🚪 Port: 3389"
+        Write-Host ""
 
-    - name: Start Free Ngrok Tunnel
+    - name: Keep Active
       run: |
-        # تشغيل ngrok بدون token (عشوائي لكل جلسة)
-        $process = Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -PassThru -NoNewWindow
-        echo "NGROK_PID=$($process.Id)" >> $env:GITHUB_ENV
-        Start-Sleep -Seconds 10
-
-    - name: Get Ngrok Info
-      run: |
-        # محاولة الحصول على معلومات النفق
-        for ($i = 1; $i -le 10; $i++) {
-            try {
-                $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
-                $rdpUrl = $tunnels.tunnels[0].public_url
-                $rdpHost = $rdpUrl -replace "tcp://", "" -split ":" | Select-Object -First 1
-                $rdpPort = $rdpUrl -replace "tcp://", "" -split ":" | Select-Object -Last 1
-                
-                echo "RDP_URL=$rdpUrl" >> $env:GITHUB_ENV
-                echo "RDP_HOST=$rdpHost" >> $env:GITHUB_ENV  
-                echo "RDP_PORT=$rdpPort" >> $env:GITHUB_ENV
-                Write-Host "✅ تم الحصول على رابط Ngrok: $rdpUrl"
-                break
-            } catch {
-                Write-Host "⏳ محاولة $i/10 - جاري الانتظار..."
-                Start-Sleep -Seconds 5
-            }
-        }
-
-    - name: Show Connection Info
-      run: |
-        if ($env:RDP_URL -ne "error") {
-            Write-Host ""
-            Write-Host "=" * 70
-            Write-Host "🎯 RDP SERVER READY - السيرفر جاهز"
-            Write-Host "=" * 70
-            Write-Host "🔗 Ngrok URL: $env:RDP_URL"
-            Write-Host "📍 Host: $env:RDP_HOST"
-            Write-Host "🚪 Port: $env:RDP_PORT"
-            Write-Host "👤 Username: RDPUser"
-            Write-Host "🔑 Password: $env:RDP_PASS"
-            Write-Host "=" * 70
-            Write-Host "📝 للاتصال: mstsc → $env:RDP_HOST:$env:RDP_PORT"
-            Write-Host "=" * 70
-        } else {
-            Write-Host "❌ لم يتم إنشاء نفق Ngrok"
-            Write-Host "💡 جرب الحلول البديلة أدناه"
-        }
-
-    - name: Keep Alive
-      run: |
+        $startTime = Get-Date
         while ($true) {
-            Write-Host "[$(Get-Date)] ✅ RDP Active - User: RDPUser | Pass: $env:RDP_PASS"
-            if ($env:RDP_URL -ne "error") {
-                Write-Host "   🔗 Ngrok: $env:RDP_URL"
-            }
-            Start-Sleep -Seconds 30
+            $elapsed = (Get-Date) - $startTime
+            $hours = [math]::Round($elapsed.TotalHours, 1)
+            
+            Write-Host "[$(Get-Date)] ⏳ RDP Server Ready (Internal Only)"
+            Write-Host "   ⏰ Running for: $hours hours"
+            Write-Host "   👤 User: RDPUser | 🔑 Pass: $env:RDP_PASS"
+            Write-Host "   💡 Use VPS for external access"
+            Write-Host ""
+            
+            Start-Sleep -Seconds 60
         }
