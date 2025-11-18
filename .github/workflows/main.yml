@@ -68,14 +68,21 @@ jobs:
         Add-LocalGroupMember -Group "Administrators" -Member $env:USERNAME
         Add-LocalGroupMember -Group "Remote Desktop Users" -Member $env:USERNAME
         
-        # تفعيل حساب Administrator المدمج
-        Enable-LocalUser -Name "Administrator"
-        Set-LocalUser -Name "Administrator" -Password $securePassword
+        # محاولة تفعيل حساب Administrator إذا كان موجوداً
+        try {
+            $adminExists = Get-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
+            if ($adminExists) {
+                Enable-LocalUser -Name "Administrator"
+                Set-LocalUser -Name "Administrator" -Password $securePassword
+                echo "ADMIN_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+            }
+        } catch {
+            Write-Host "⚠️  حساب Administrator غير متوفر"
+        }
         
         # حفظ بيانات الدخول
         echo "RDP_USERNAME=$env:USERNAME" | Out-File -FilePath $env:GITHUB_ENV -Append
         echo "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "ADMIN_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: الحصول على IP العام
       run: |
@@ -117,8 +124,6 @@ jobs:
         Write-Host "🚪 المنفذ: $env:CUSTOM_PORT"
         Write-Host "👤 المستخدم: $env:RDP_USERNAME"
         Write-Host "🔑 كلمة المرور: $env:RDP_PASSWORD"
-        Write-Host "👑 المسؤول: Administrator"
-        Write-Host "🔑 كلمة مرور المسؤول: $env:ADMIN_PASSWORD"
         Write-Host "💻 اسم الجهاز: $env:COMPUTER_NAME"
         Write-Host "⏰ المدة: ${{ github.event.inputs.duration }} ساعة"
         Write-Host "=" * 60
