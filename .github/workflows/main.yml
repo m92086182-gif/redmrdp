@@ -1,4 +1,4 @@
-name: Windows RDP Server (Public)
+name: Windows RDP Server (Fixed)
 
 on:
   workflow_dispatch:
@@ -14,168 +14,118 @@ on:
           - '72'
           - '168'
 
-env:
-  CUSTOM_PORT: 3389
-  USERNAME: 'AdminRDP'
-
 jobs:
-  deploy-public-rdp:
+  deploy-rdp:
     runs-on: windows-latest
     timeout-minutes: 4320
 
     steps:
-    - name: التحقق من المواصفات
+    - name: إعداد RDP الأساسي
       run: |
-        echo "🖥️ مواصفات السيرفر:"
-        systeminfo | findstr /C:"Total Physical Memory"
-        systeminfo | findstr /C:"Processor(s)"
-
-    - name: تعطيل إعدادات الأمان المؤقتة للـRDP
-      run: |
-        # تفعيل RDP
+        Write-Host "🔧 جاري إعداد RDP..."
+        
+        # 1. تفعيل RDP
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
+        Write-Host "✅ تم تفعيل RDP"
         
-        # تعطيل NLA مؤقتاً للاتصال السهل
+        # 2. تعطيل NLA
         Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
-        
-        # إعدادات الجلسات المتعددة
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name "fSingleSessionPerUser" -Value 0 -Force
+        Write-Host "✅ تم تعطيل NLA"
 
-    - name: فتح منافذ RDP في الجدار الناري
+    - name: فتح الجدار الناري
       run: |
-        # حذف أي قواعد موجودة مسبقاً
-        netsh advfirewall firewall delete rule name="PublicRDP" 2>&1 | Out-Null
-        
-        # فتح منفذ RDP الافتراضي
-        netsh advfirewall firewall add rule name="PublicRDP" dir=in action=allow protocol=TCP localport=$env:CUSTOM_PORT
-        
-        # إظهار القواعد المضافَة
-        netsh advfirewall firewall show rule name="PublicRDP"
+        # فتح منفذ RDP
+        netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+        Write-Host "✅ تم فتح منفذ 3389"
 
-    - name: إنشاء مستخدم مسؤول
+    - name: إنشاء مستخدم
       run: |
-        # استخدام كلمة مرور قوية تفي بمتطلبات Windows
-        $password = "QwErTyUiOp123!"
+        $password = "P@ssw0rd123"
         $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
         
-        # حذف المستخدم إذا كان موجوداً مسبقاً
-        try {
-            Remove-LocalUser -Name $env:USERNAME -ErrorAction SilentlyContinue
-        } catch { }
+        # إنشاء مستخدم جديد
+        New-LocalUser -Name "RDPUser" -Password $securePassword -AccountNeverExpires
+        Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
         
-        # إنشاء المستخدم الجديد
-        New-LocalUser -Name $env:USERNAME -Password $securePassword -AccountNeverExpires
-        Add-LocalGroupMember -Group "Administrators" -Member $env:USERNAME
-        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $env:USERNAME
-        
-        # محاولة تفعيل حساب Administrator إذا كان موجوداً
-        try {
-            $adminExists = Get-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
-            if ($adminExists) {
-                Enable-LocalUser -Name "Administrator"
-                Set-LocalUser -Name "Administrator" -Password $securePassword
-                echo "ADMIN_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
-            }
-        } catch {
-            Write-Host "⚠️  حساب Administrator غير متوفر"
-        }
-        
-        # حفظ بيانات الدخول
-        echo "RDP_USERNAME=$env:USERNAME" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "RDP_USER=RDPUser" >> $env:GITHUB_ENV
+        echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+        Write-Host "✅ تم إنشاء المستخدم"
 
-    - name: الحصول على IP العام
-      run: |
-        # الحصول على IP العام
-        try {
-            $publicIP = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 10).Trim()
-            echo "PUBLIC_IP=$publicIP" | Out-File -FilePath $env:GITHUB_ENV -Append
-        } catch {
-            echo "PUBLIC_IP=Unable to get public IP" | Out-File -FilePath $env:GITHUB_ENV -Append
-        }
-        
-        # تعيين اسم جهاز
-        $hostname = "GH-RDP-$env:GITHUB_RUN_ID"
-        Rename-Computer -NewName $hostname -Force
-        echo "COMPUTER_NAME=$hostname" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-    - name: تحسين أداء Windows
-      run: |
-        # تحسين إعدادات الأداء
-        powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
-        
-        # تعطيل السكون
-        powercfg -change -standby-timeout-ac 0
-        powercfg -change -hibernate-timeout-ac 0
-
-    - name: تشغيل خدمات RDP
+    - name: تشغيل الخدمات
       run: |
         # إعادة تشغيل خدمات RDP
         Restart-Service -Name "TermService" -Force
-        Start-Sleep -Seconds 5
+        Start-Sleep -Seconds 10
+        Write-Host "✅ تم تشغيل الخدمات"
+
+    - name: الحصول على معلومات الشبكة
+      run: |
+        # الحصول على IP العام
+        $publicIP = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
+        echo "PUBLIC_IP=$publicIP" >> $env:GITHUB_ENV
+        
+        # الحصول على IP المحلي
+        $localIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -eq "Ethernet" -or $_.InterfaceAlias -eq "Wi-Fi"}).IPAddress
+        echo "LOCAL_IP=$localIP" >> $env:GITHUB_ENV
+        
+        Write-Host "✅ تم الحصول على معلومات الشبكة"
+
+    - name: التحقق من عمل RDP
+      run: |
+        Write-Host "🔍 جاري التحقق من عمل RDP..."
+        
+        # التحقق من حالة الخدمة
+        $service = Get-Service -Name "TermService"
+        Write-Host "📊 حالة الخدمة: $($service.Status)"
+        
+        # التحقق من فتح المنفذ
+        $portTest = Test-NetConnection -ComputerName localhost -Port 3389 -InformationLevel Quiet
+        Write-Host "🔌 فتح المنفذ: $portTest"
+        
+        # التحقق من إعدادات الريجستري
+        $rdpEnabled = Get-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections"
+        Write-Host "⚙️  RDP مفعل: $($rdpEnabled.fDenyTSConnections -eq 0)"
 
     - name: عرض معلومات الاتصال
       run: |
         Write-Host ""
-        Write-Host "=" * 60
-        Write-Host "🎯 RDP السيرفر جاهز للاستخدام!"
-        Write-Host "=" * 60
-        Write-Host "🌐 IP العام: $env:PUBLIC_IP"
-        Write-Host "🚪 المنفذ: $env:CUSTOM_PORT"
-        Write-Host "👤 المستخدم: $env:RDP_USERNAME"
-        Write-Host "🔑 كلمة المرور: $env:RDP_PASSWORD"
-        Write-Host "💻 اسم الجهاز: $env:COMPUTER_NAME"
-        Write-Host "⏰ المدة: ${{ github.event.inputs.duration }} ساعة"
-        Write-Host "=" * 60
-        Write-Host "📝 للاتصال: mstsc → $env:PUBLIC_IP:$env:CUSTOM_PORT"
-        Write-Host "=" * 60
+        Write-Host "=" * 70
+        Write-Host "🎯 RDP SERVER READY - السيرفر جاهز"
+        Write-Host "=" * 70
+        Write-Host "🌐 PUBLIC IP: $env:PUBLIC_IP"
+        Write-Host "🏠 LOCAL IP: $env:LOCAL_IP" 
+        Write-Host "👤 USERNAME: $env:RDP_USER"
+        Write-Host "🔑 PASSWORD: $env:RDP_PASS"
+        Write-Host "🚪 PORT: 3389"
+        Write-Host "⏰ DURATION: ${{ github.event.inputs.duration }} hours"
+        Write-Host "=" * 70
+        Write-Host "📝 للاتصال: mstsc → $env:PUBLIC_IP"
+        Write-Host "=" * 70
         Write-Host ""
 
-    - name: المراقبة المستمرة
+    - name: الانتظار النشط
       run: |
         $duration = ${{ github.event.inputs.duration }}
         $endTime = (Get-Date).AddHours($duration)
-        $checkInterval = 300
         
         while ((Get-Date) -lt $endTime) {
             $timeLeft = $endTime - (Get-Date)
             $hoursLeft = [math]::Round($timeLeft.TotalHours, 1)
             
-            Write-Host "[$(Get-Date)] ✅ السيرفر يعمل - $hoursLeft ساعة متبقية"
-            Write-Host "🌐 IP: $env:PUBLIC_IP - 👤 User: $env:RDP_USERNAME - 🔑 Pass: $env:RDP_PASSWORD"
+            Write-Host "[$(Get-Date)] 🟢 RDP Active - $hoursLeft hours remaining"
+            Write-Host "   IP: $env:PUBLIC_IP | User: $env:RDP_USER | Pass: $env:RDP_PASS"
             
-            # اختبار الاتصال المحلي
+            # اختبار الاتصال كل دقيقة
             try {
-                $test = Test-NetConnection -ComputerName localhost -Port $env:CUSTOM_PORT -WarningAction SilentlyContinue
+                $test = Test-NetConnection -ComputerName localhost -Port 3389 -WarningAction SilentlyContinue
                 if (-not $test.TcpTestSucceeded) {
-                    Write-Host "إعادة تفعيل RDP..."
+                    Write-Host "   🔄 إعادة تشغيل الخدمة..."
                     Restart-Service -Name "TermService" -Force
-                    Start-Sleep -Seconds 10
                 }
             } catch {
-                Write-Host "إعادة تشغيل الخدمة..."
-                Restart-Service -Name "TermService" -Force
-                Start-Sleep -Seconds 10
+                Write-Host "   ⚠️  خطأ في الاختبار"
             }
             
-            Start-Sleep -Seconds $checkInterval
+            Start-Sleep -Seconds 60
         }
-        
-        Write-Host "⏰ انتهت المدة - إيقاف السيرفر"
-
-    - name: التنظيف النهائي
-      if: always()
-      run: |
-        Write-Host "🧹 جاري التنظيف..."
-        # تعطيل RDP
-        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 1 -Force
-        
-        # حذف قواعد الجدار الناري
-        netsh advfirewall firewall delete rule name="PublicRDP" 2>&1 | Out-Null
-        
-        # حذف المستخدمين
-        try {
-            Remove-LocalUser -Name $env:USERNAME -ErrorAction SilentlyContinue
-        } catch { }
-        
-        Write-Host "✅ تم التنظيف بنجاح"
